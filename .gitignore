@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# macOS
+.DS_Store
+
+# Editor / local tooling
+.vscode/
+.claude/
+
+# Generated artifacts (regenerable: `tar -czf submission.tar.gz main.py`, `python run.py`)
+replay.html
+submission.tar.gz
