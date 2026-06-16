@@ -23,7 +23,6 @@ Everything tunable lives in PARAMS (M3 will optimize these via self-play).
 """
 
 import math
-import os
 import time
 
 # ---------------------------------------------------------------------------

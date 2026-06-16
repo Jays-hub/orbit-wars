@@ -23,7 +23,6 @@ Everything tunable lives in PARAMS (M3 will optimize these via self-play).
 """
 
 import math
-import os
 import time
 
 # ---------------------------------------------------------------------------
@@ -57,11 +56,6 @@ PARAMS = {
     "targets_per_source": 6,  # nearest targets considered per owned planet
     "weak_mult": 0.6,         # 4P: how much harder to weight the weakest opponent
     "elim_bonus": 60.0,       # value bonus per opponent reduced to zero
-    # Adaptive aggression (Port A): when we fall behind the strongest opponent
-    # we must NOT hoard — free defensive reserves and commit lower-gain moves so
-    # we keep contesting/expanding instead of being ground down passively.
-    "behind_reserve_cut": 0.6,  # when far behind, cut defensive reserves by up to this fraction
-    "behind_gain_cut": 0.9,     # when far behind, cut the min-gain commit bar by up to this fraction
     "max_speed": DEFAULT_MAX_SPEED,
     "aim_iters": 4,           # size<->aim refinement iterations
     "aim_scan": (-0.06, -0.03, 0.0, 0.03, 0.06),  # lead-angle search for movers
@@ -519,22 +513,6 @@ def _decide(obs, start_time):
         for o, s in opp_strength.items()
     }
 
-    # Adaptive aggression (Port A). Measure how far behind the strongest
-    # opponent we are; when behind, cut hoarded reserves and lower the commit
-    # bar so we keep contesting/expanding instead of going passive and being
-    # eliminated (the failure mode the arena exposed vs strong agents).
-    my_strength = 0.0
-    for pl in planets:
-        if pl[POWN] == me:
-            my_strength += pl[PSHIP] + pl[PPROD]
-    for f in fleets:
-        if f[FOWN] == me:
-            my_strength += f[FSHIP]
-    ratio = my_strength / (max_str + 1.0)
-    aggr = max(0.0, min(1.0, 1.0 - ratio))          # 0 when even/ahead, ->1 far behind
-    reserve_scale = 1.0 - p["behind_reserve_cut"] * aggr
-    min_gain_eff = p["min_gain"] * (1.0 - p["behind_gain_cut"] * aggr)
-
     horizon = p["horizon"]
 
     # Baseline: no new orders. Drives keep_needed and the value reference point.
@@ -550,7 +528,6 @@ def _decide(obs, start_time):
     deficit = {}
     for pl in my_planets:
         k = keep.get(pl[PID], p["base_reserve"])
-        k = max(p["base_reserve"], int(k * reserve_scale))  # free reserves when behind
         surplus[pl[PID]] = max(0, pl[PSHIP] - k)
         deficit[pl[PID]] = max(0, k - pl[PSHIP])
 
@@ -634,7 +611,7 @@ def _decide(obs, start_time):
     taken = set()
     chosen = []
     for gain, c in scored:
-        if gain <= min_gain_eff:
+        if gain <= p["min_gain"]:
             continue
         if c["dst"] in taken:
             continue

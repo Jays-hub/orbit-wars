@@ -81,9 +81,16 @@ pip install "kaggle-environments>=1.28.0"   # Orbit Wars needs >= 1.28.0
 - `arena.py` — *(to build, M2)* self-play harness: runs many games between two bot
   versions and reports win-rate with statistical confidence. The iteration engine.
 
-Reference material (adapt, don't reinvent): the documented top-5 agent writeup
-(`kvatsa5/orbit-wars-agent` on Hugging Face) and public notebooks — "Robust Agent,"
+Reference material (adapt, don't reinvent): public notebooks — "Robust Agent,"
 "Step-by-Step Agent Dev & Ablation," "Orbit Wars 101."
+
+**Caveat (verified 2026-06-16):** the HF `kvatsa5/orbit-wars-agent` `submission.py`
+is **non-functional in the current engine** — it returns 0 moves every turn and
+loses 0/20 to `starter` (hardcodes owner 0 = neutral *and* its move-gen is fully
+passive; fixing the owner bug didn't help). Its README claims (top-5, "~90% vs
+starter", "3379 lines") are false — it's 796 lines. Don't re-adapt it. (M1 beats
+`starter` 100%, but that proved nothing — see the reality-check below, where M1
+loses badly to a *functioning* strong agent.)
 
 ---
 
@@ -204,6 +211,72 @@ revisit them in M3/M4 for parameter priors and exploits.
 **Next (M2):** build `arena.py` (self-play, hundreds of games, win-rate ± CI)
 so M3 parameter tuning isn't done on noise. The simulator being engine-exact
 means arena results will transfer to the ladder.
+
+### M2 — COMPLETE (2026-06-16)
+
+`arena.py` is the iteration engine: runs many games between two agents and
+reports win-rate with a confidence interval so M3 tunes on signal, not noise.
+
+- **Antithetic seat-swap (variance reduction).** The board is generated from
+  `random.Random(seed)` independently of agent order; seat 0 starts Q1, seat 1
+  starts Q4. So each seed is played twice — A in seat 0, then A in seat 1 —
+  i.e. the *same map with swapped homes*, cancelling positional bias (common
+  random numbers). 4P rotates A through all four seats per seed.
+- **Defensive outcome reading.** Engine reward is +1 for every agent at the top
+  score (>0) else −1, so a 2P score tie is both-+1 → counted a **draw**. A
+  crashed/timed-out agent (status ERROR/TIMEOUT/INVALID) is scored a **flagged
+  loss**. Crucially the engine's terminal block overwrites all statuses to DONE,
+  so the arena scans **every** step (not just the last) to catch a failure that
+  was masked — an ever-failed bot is a loss even if it "won" a frozen board.
+- **Stats:** W/D/L, win-rate (draws = ½) with **Wilson** CI, **LOS** (P(A truly
+  stronger), decisive games), a verdict (CI vs 50%), and a **score-margin** line
+  (avg ship differential — ladder ignores margin but it's a low-variance tuning
+  proxy). Parallel via `ProcessPoolExecutor`; 2P + 4P; importable `run_arena()`.
+- `_resolve_spec()` is the single extension point for **M3 param injection**
+  (resolve a (path, params) spec to a callable *inside the worker*, so nothing
+  unpicklable crosses processes — sidesteps kaggle's file-agent caching).
+
+**Verified (local, 12-core):**
+- **Balance proven, not assumed:** main.py vs itself = exactly **50.0%**, margin
+  **+0.0** (0W/10D/0L) — zero seat bias. The high draw rate is real: two
+  identical deterministic bots on a 4-fold-symmetric board mirror to ties.
+- **Discriminates strength:** vs `starter` **100%** (2P +3173 / 4P +2958 margin
+  ships), LOS ~99.8%, verdict "significantly better".
+- **Reliability net works:** a deliberately-crashing opponent is flagged
+  (B failures = N) and scored a loss; the harness never crashes.
+- **Throughput (full 500-step games, 11 workers):** vs starter ~0.7 s/game
+  (~2.3 games/s); bot-vs-bot ~8–10 s/game (~0.8 games/s) → ~300 games in ~6 min.
+
+**M3 guidance (from M2 findings):** candidate-vs-baseline self-play is
+draw-heavy by symmetry, so win/draw/loss has low signal-per-game near equality —
+prefer the **score-margin** as the CMA-ES objective (smooth, low-variance) and
+confirm finalists on win-rate; reuse a fixed seed set across candidates (CRN)
+for paired comparisons. Inject params via `_resolve_spec` (one process per
+candidate to dodge kaggle's agent caching).
+
+### Strength reality-check — M1 has a real weakness (2026-06-16)
+
+M1 dominates `random`/`starter`, but that proved nothing. The only *functioning*
+strong public agent found — **`opp_producer`** (Kaggle dataset
+`slawekbiel/producer-orbit-wars-utils`; torch + `orbit_lite/`, ~20 ms/turn,
+reliable, ladder-legal on speed) — **beats M1 0/8** (seat-balanced seeds, LOS
+0.2%, −1677 margin), reproduced with both `diag_game.py` and `arena.py`.
+
+Diagnosis (deterministic seed-1 trajectory, reproduced): M1 is **even through
+~step 30** (sim/architecture are fine) — then it (a) **loses the production
+snowball** (producer ends ~2× planets / 3–12× ships) and, decisively, (b) **goes
+passive when behind** — fleet count collapses to 0 and it *sheds* planets instead
+of fighting. The gap is **behavioral, not architectural** — good news: M1's
+engine-exact sim + the arena are exactly the tools to close it.
+
+`opp_producer.py` + `orbit_lite/` are kept as the **M3 gauntlet opponent**
+(NEVER submit — third-party). Plan: port the IDEAS (not code) into M1, highest
+leverage first — **adaptive aggression / anti-hoarding when behind**, then
+production-snowball targeting and proactive interception — measuring each change
+vs `opp_producer` with `arena.py`, keeping only what moves the needle.
+
+**Next (M3):** execute that port-and-measure loop; tune `PARAMS` with `arena.py`
+against the gauntlet (`baseline.py` + `opp_producer.py` + `starter`).
 
 ---
 
